@@ -5,6 +5,7 @@
 #include "mruby/ext/io.h"
 
 #include "mruby/variable.h"
+#include "mruby/hash.h"
 
 /*#include "mruby/ext/context_log.h"*/
 
@@ -136,6 +137,39 @@ static mrb_value mrb_ctrdrbg_initialize(mrb_state *mrb, mrb_value self) {
   return self;
 }
 
+static mrb_value mrb_ctrdrbg_random_bytes(mrb_state *mrb, mrb_value self) {
+  mrb_int num_bytes;
+  mbedtls_ctr_drbg_context *ctr_drbg;
+  unsigned char *buf;
+  mrb_value str;
+
+  mrb_get_args(mrb, "i", &num_bytes);
+
+  ctr_drbg = (mbedtls_ctr_drbg_context *)DATA_PTR(self);
+
+  if (!ctr_drbg) {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "DRBG not initialized");
+  }
+
+  buf = mrb_malloc(mrb, num_bytes);
+
+  if (!buf) {
+    mrb_raise(mrb, E_RUNTIME_ERROR, "Buffer allocation failed");
+  }
+
+  if (mbedtls_ctr_drbg_random(ctr_drbg, buf, num_bytes)) {
+    free(buf);
+    mrb_raise(mrb, E_RUNTIME_ERROR, "Random data generation failed");
+  }
+
+  str = mrb_str_new(mrb, (char *) buf, num_bytes);
+
+  mrb_free(mrb, buf);
+  buf = NULL;
+
+  return str;
+}
+
 static mrb_value mrb_ctrdrbg_self_test() {
   if( mbedtls_ctr_drbg_self_test(0) == 0 ) {
     return mrb_true_value();
@@ -148,6 +182,7 @@ static mrb_value mrb_ctrdrbg_self_test() {
 #define E_NETWANTREAD (mrb_class_get_under(mrb,mrb_class_get(mrb, "PolarSSL"),"NetWantRead"))
 #define E_NETWANTWRITE (mrb_class_get_under(mrb,mrb_class_get(mrb, "PolarSSL"),"NetWantWrite"))
 #define E_SSL_ERROR (mrb_class_get_under(mrb,mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"SSL"), "Error"))
+#define E_SSL_READ_TIMEOUT (mrb_class_get_under(mrb,mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"SSL"), "ReadTimeoutError"))
 
 #if defined(MRUBY_MBEDTLS_DEBUG_C)
 static void my_debug_func( void *ctx, int level,
@@ -161,6 +196,18 @@ static void my_debug_func( void *ctx, int level,
 static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   mbedtls_ssl_context *ssl;
   mbedtls_ssl_config *conf;
+  mrb_value hash, timeout;
+  mrb_int timeout_ms = 0;
+
+  mrb_get_args(mrb, "|H", &hash);
+
+  if (mrb_hash_p(hash)) {
+    timeout = mrb_hash_get(mrb, hash, mrb_symbol_value(mrb_intern_cstr(mrb, "read_timeout")));
+    hash = mrb_hash_new(mrb);
+    if (mrb_fixnum_p(timeout)) {
+      timeout_ms = mrb_fixnum(timeout);
+    }
+  }
 
 #if MBEDTLS_VERSION_MAJOR == 1 && MBEDTLS_VERSION_MINOR == 1
   ssl_session *ssn;
@@ -183,6 +230,10 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
 
   mbedtls_ssl_config_defaults( conf, MBEDTLS_SSL_IS_CLIENT,
       MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT );
+
+  if (timeout_ms != 0) {
+    mbedtls_ssl_conf_read_timeout(conf, timeout_ms);
+  }
 
 #if defined(MRUBY_MBEDTLS_DEBUG_C)
   mbedtls_ssl_conf_dbg( conf, my_debug_func, stdout );
@@ -243,7 +294,7 @@ static mrb_value mrb_ssl_set_socket(mrb_state *mrb, mrb_value self) {
   mrb_data_check_type(mrb, socket, &mrb_io_type);
   fptr = DATA_CHECK_GET_PTR(mrb, socket, &mrb_io_type, struct mrb_io);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, mbedtls_net_recv, NULL ); // timeout recv
+  mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, mbedtls_net_recv, mbedtls_net_recv_timeout );
   return mrb_true_value();
 }
 
@@ -320,8 +371,11 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
   ret = mbedtls_ssl_read(ssl, (unsigned char *)buf, maxlen);
   if ( ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || buf == NULL) {
     value = mrb_nil_value();
+  } else if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
+    mrb_raise(mrb, E_SSL_READ_TIMEOUT, "ssl_read() returned E_SSL_READ_TIMEOUT");
+    value = mrb_nil_value();
   } else if (ret < 0) {
-    mrb_raise(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR");
+    mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d]", ret);
     value = mrb_nil_value();
   } else {
     value = mrb_str_new(mrb, buf, ret);
@@ -712,11 +766,12 @@ void mrb_mruby_polarssl_gem_init(mrb_state *mrb) {
   c = mrb_define_class_under(mrb, p, "CtrDrbg", mrb->object_class);
   MRB_SET_INSTANCE_TT(c, MRB_TT_DATA);
   mrb_define_method(mrb, c, "initialize", mrb_ctrdrbg_initialize, MRB_ARGS_REQ(1) | MRB_ARGS_OPT(1));
+  mrb_define_method(mrb, c, "random_bytes", mrb_ctrdrbg_random_bytes, MRB_ARGS_REQ(1));
   mrb_define_singleton_method(mrb, (struct RObject*)c, "self_test", mrb_ctrdrbg_self_test, MRB_ARGS_NONE());
 
   s = mrb_define_class_under(mrb, p, "SSL", mrb->object_class);
   MRB_SET_INSTANCE_TT(s, MRB_TT_DATA);
-  mrb_define_method(mrb, s, "initialize", mrb_ssl_initialize, MRB_ARGS_NONE());
+  mrb_define_method(mrb, s, "initialize", mrb_ssl_initialize, MRB_ARGS_OPT(1));
   // 0: Endpoint mode for acting as a client.
   mrb_define_const(mrb, s, "SSL_IS_CLIENT", mrb_fixnum_value(MBEDTLS_SSL_IS_CLIENT));
   // 0: Certificate verification mode for doing no verification.

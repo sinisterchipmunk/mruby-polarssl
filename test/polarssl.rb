@@ -88,6 +88,10 @@ if Object.const_defined?(:PolarSSL)
     ssl.set_authmode(PolarSSL::SSL::SSL_VERIFY_NONE)
   end
 
+  assert('PolarSSL::SSL#new with read timeout') do
+    PolarSSL::SSL.new(read_timeout: 20000)
+  end
+
   assert('PolarSSL::SSL#set_rng') do
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
