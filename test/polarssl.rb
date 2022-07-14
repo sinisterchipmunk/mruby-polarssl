@@ -115,7 +115,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#set_socket') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -126,7 +126,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#handshake') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -139,7 +139,7 @@ if Object.const_defined?(:PolarSSL)
 
   assert('PolarSSL::SSL#handshake err') do
     @e = nil
-    socket = TCPSocket.new('polarssl.org', 80)
+    socket = TCPSocket.new('tls.mbed.org', 80)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -155,7 +155,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#write') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -168,7 +168,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#read') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -177,7 +177,7 @@ if Object.const_defined?(:PolarSSL)
     ssl.set_rng(ctr_drbg)
     ssl.set_socket(socket)
     ssl.handshake
-    ssl.write("GET / HTTP/1.0\r\nHost: polarssl.org\r\n\r\n")
+    ssl.write("GET / HTTP/1.0\r\nHost: tls.mbed.org\r\n\r\n")
     response = ""
     while chunk = ssl.read(1024)
       response << chunk
@@ -188,7 +188,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#close_notify') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -197,7 +197,7 @@ if Object.const_defined?(:PolarSSL)
     ssl.set_rng(ctr_drbg)
     ssl.set_socket(socket)
     ssl.handshake
-    ssl.write("GET / HTTP/1.0\r\nHost: polarssl.org\r\n\r\n")
+    ssl.write("GET / HTTP/1.0\r\nHost: tls.mbed.org\r\n\r\n")
     buf = ssl.read(4)
     #debug
     #p buf
@@ -205,7 +205,7 @@ if Object.const_defined?(:PolarSSL)
   end
 
   assert('PolarSSL::SSL#close') do
-    socket = TCPSocket.new('polarssl.org', 443)
+    socket = TCPSocket.new('tls.mbed.org', 443)
     entropy = PolarSSL::Entropy.new
     ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
     ssl = PolarSSL::SSL.new
@@ -214,7 +214,7 @@ if Object.const_defined?(:PolarSSL)
     ssl.set_rng(ctr_drbg)
     ssl.set_socket(socket)
     ssl.handshake
-    ssl.write("GET / HTTP/1.0\r\nHost: polarssl.org\r\n\r\n")
+    ssl.write("GET / HTTP/1.0\r\nHost: tls.mbed.org\r\n\r\n")
     buf = ssl.read(4)
     #debug
     #p buf

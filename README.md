@@ -29,7 +29,7 @@ ruby run_test.rb test
 
 ## Usage
 ```ruby
-socket = TCPSocket.new('polarssl.org', 443)
+socket = TCPSocket.new('tls.mbed.org', 443)
 
 entropy = PolarSSL::Entropy.new
 ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
@@ -42,7 +42,7 @@ ssl.set_socket(socket)
 
 ssl.handshake
 
-ssl.write("GET / HTTP/1.0\r\nHost: polarssl.org\r\n\r\n")
+ssl.write("GET / HTTP/1.0\r\nHost: tls.mbed.org\r\n\r\n")
 
 response = ""
 while chunk = ssl.read(1024)
