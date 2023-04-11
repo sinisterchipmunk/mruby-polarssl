@@ -1,4 +1,6 @@
 # PolarSSL Test
+if Object.const_defined?(:MTest)
+
 if Object.const_defined?(:PolarSSL)
   assert("PolarSSL") do
     PolarSSL.class == Module
@@ -222,5 +224,9 @@ if Object.const_defined?(:PolarSSL)
     socket.close
     ssl.close
   end
+end
+
+else
+  $asserts << "Skip: PolarSSL mtest."  if $asserts
 end
 

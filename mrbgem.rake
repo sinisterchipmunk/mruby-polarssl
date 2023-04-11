@@ -14,8 +14,7 @@ MRuby::Gem::Specification.new('mruby-polarssl') do |spec|
   spec.objs += Dir.glob("#{polarssl_src}/library/*.{c,cpp,m,asm,S}").map { |f| f.relative_path_from(dir).pathmap("#{build_dir}/%X.o") }
 
   spec.add_dependency 'mruby-print'
-  spec.add_dependency 'mruby-string-ext', core: 'mruby-string-ext'
+  spec.add_dependency 'mruby-string-ext'
   spec.add_dependency 'mruby-io'
   spec.add_dependency 'mruby-socket'
-  spec.add_test_dependency 'mruby-mtest'
 end

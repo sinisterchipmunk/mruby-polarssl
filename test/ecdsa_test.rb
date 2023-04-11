@@ -1,3 +1,4 @@
+if Object.const_defined?(:MTest)
 
 class EcdsaTest < MTest::Unit::TestCase
   def setup
@@ -89,5 +90,9 @@ if $ok_test
   MTest::Unit.new.mrbtest
 else
   MTest::Unit.new.run
+end
+
+else
+  $asserts << "Skip: PolarSSL ECDSA mtest."  if $asserts
 end
 

@@ -1,4 +1,4 @@
-
+if Object.const_defined?(:MTest)
 class CipherTest < MTest::Unit::TestCase
   def test_cipher_encrypt_des_cbc
     cipher = PolarSSL::Cipher.new("DES-CBC")
@@ -70,3 +70,7 @@ if $ok_test
 else
   MTest::Unit.new.run
 end
+else
+  $asserts << "Skip: PolarSSL cipher mtest."  if $asserts
+end
+

@@ -1,3 +1,4 @@
+if Object.const_defined?(:MTest)
 class Base64Test < MTest::Unit::TestCase
   TEST_DATA = [
       {
@@ -36,3 +37,7 @@ if $ok_test
 else
   MTest::Unit.new.run
 end
+else
+  $asserts << "Skip: PolarSSL Base64 mtest."  if $asserts
+end
+
