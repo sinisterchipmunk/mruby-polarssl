@@ -101,7 +101,7 @@ static mrb_value mrb_entropy_initialize(mrb_state *mrb, mrb_value self) {
 static mrb_value mrb_ctrdrbg_initialize(mrb_state *mrb, mrb_value self) {
   mbedtls_ctr_drbg_context *ctr_drbg;
   mbedtls_entropy_context *entropy_p;
-  mrb_value entp, pers;
+  mrb_value entp, pers = mrb_nil_value();
   int ret;
 
   ctr_drbg = (mbedtls_ctr_drbg_context *)DATA_PTR(self);
@@ -196,17 +196,16 @@ static void my_debug_func( void *ctx, int level,
 static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   mbedtls_ssl_context *ssl;
   mbedtls_ssl_config *conf;
-  mrb_value hash, timeout;
   mrb_int timeout_ms = 0;
 
-  mrb_get_args(mrb, "|H", &hash);
-
-  if (mrb_hash_p(hash)) {
-    timeout = mrb_hash_get(mrb, hash, mrb_symbol_value(mrb_intern_cstr(mrb, "read_timeout")));
-    hash = mrb_hash_new(mrb);
-    if (mrb_fixnum_p(timeout)) {
-      timeout_ms = mrb_fixnum(timeout);
-    }
+  mrb_int kw_num = 1;
+  mrb_int kw_required = 0;
+  mrb_sym kw_names[] = { mrb_intern_lit(mrb, "read_timeout") };
+  mrb_value kw_values[kw_num];
+  mrb_kwargs kwargs = { kw_num, kw_required, kw_names, kw_values, NULL };
+  mrb_get_args(mrb, ":", &kwargs);
+  if (!mrb_undef_p(kw_values[0])) {
+    timeout_ms = mrb_as_int(mrb, kw_values[0]);
   }
 
 #if MBEDTLS_VERSION_MAJOR == 1 && MBEDTLS_VERSION_MINOR == 1
@@ -771,7 +770,7 @@ void mrb_mruby_polarssl_gem_init(mrb_state *mrb) {
 
   s = mrb_define_class_under(mrb, p, "SSL", mrb->object_class);
   MRB_SET_INSTANCE_TT(s, MRB_TT_DATA);
-  mrb_define_method(mrb, s, "initialize", mrb_ssl_initialize, MRB_ARGS_OPT(1));
+  mrb_define_method(mrb, s, "initialize", mrb_ssl_initialize, MRB_ARGS_KEY(1, 0));
   // 0: Endpoint mode for acting as a client.
   mrb_define_const(mrb, s, "SSL_IS_CLIENT", mrb_fixnum_value(MBEDTLS_SSL_IS_CLIENT));
   // 0: Certificate verification mode for doing no verification.
