@@ -253,24 +253,24 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   }
 
   if (!mrb_nil_p(alpn_protos)) {
+    int rc = 0;
     mrb_int len = RARRAY_LEN(alpn_protos);
-    const char **alpns = malloc(sizeof(char *) * (len + 1));
+    const char **alpns = mrb_malloc(mrb, sizeof(char *) * (len + 1));
     for (mrb_int i = 0; i < len; i++) {
-      // alpns[i] = mrb_str_to_cstr(mrb, RARRAY_PTR(alpn_protos)[i]);
       mrb_gc_protect(mrb, RARRAY_PTR(alpn_protos)[i]);
       alpns[i] = RSTRING_PTR(RARRAY_PTR(alpn_protos)[i]);
     }
     alpns[len] = NULL;
-    int rc = mbedtls_ssl_conf_alpn_protocols(conf, alpns);
+    rc = mbedtls_ssl_conf_alpn_protocols(conf, alpns);
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "alpn_protocols: mbedtls_ssl_conf_alpn_protocols returned %d\n\n", rc);
   }
 
   if (!mrb_nil_p(ca_chain)) {
+    int rc = 0;
     mrb_gc_protect(mrb, ca_chain);
     mrb_str_cat(mrb, ca_chain, "\0", 1);
-    int rc = 0;
-    mbedtls_x509_crt *chain = malloc(sizeof(mbedtls_x509_crt));
+    mbedtls_x509_crt *chain = mrb_malloc(mrb, sizeof(mbedtls_x509_crt));
     mbedtls_x509_crt_init(chain);
     rc = mbedtls_x509_crt_parse(chain, (const unsigned char *) RSTRING_PTR(ca_chain), RSTRING_LEN(ca_chain));
     if (rc != 0)
@@ -279,14 +279,14 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   }
   
   if (!mrb_nil_p(client_key) || !mrb_nil_p(client_cert)) {
+    int rc = 0;
     if (mrb_nil_p(client_key) || mrb_nil_p(client_cert))
       mrb_raisef(mrb, E_ARGUMENT_ERROR, ":client_key and :client_cert must be provided together");
 
-    mbedtls_x509_crt *cert = malloc(sizeof(mbedtls_x509_crt));
-    mbedtls_pk_context *pkey = malloc(sizeof(mbedtls_pk_context));
+    mbedtls_x509_crt *cert = mrb_malloc(mrb, sizeof(mbedtls_x509_crt));
+    mbedtls_pk_context *pkey = mrb_malloc(mrb, sizeof(mbedtls_pk_context));
     mbedtls_x509_crt_init(cert);
     mbedtls_pk_init(pkey);
-    int rc = 0;
 
     mrb_gc_protect(mrb, client_cert);
     mrb_gc_protect(mrb, client_key);
