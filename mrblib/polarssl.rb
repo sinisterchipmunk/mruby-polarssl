@@ -8,6 +8,7 @@ if Object.const_defined? :PolarSSL
     class SSL
       class Error < StandardError; end
       class ReadTimeoutError < StandardError; end
+      attr_reader :socket
     end
   end
 end

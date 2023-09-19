@@ -1,4 +1,5 @@
 #include "mruby.h"
+#include "mruby/array.h"
 #include "mruby/class.h"
 #include "mruby/data.h"
 #include "mruby/string.h"
@@ -30,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#include <fcntl.h> // for blocking/nonblocking sockets
 
 #if MRUBY_RELEASE_NO < 10000
 static struct RClass *mrb_module_get(mrb_state *mrb, const char *name) {
@@ -197,16 +200,31 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   mbedtls_ssl_context *ssl;
   mbedtls_ssl_config *conf;
   mrb_int timeout_ms = 0;
+  mrb_value alpn_protos = mrb_nil_value();
+  mrb_value ca_chain = mrb_nil_value();
+  mrb_value client_cert = mrb_nil_value();
+  mrb_value client_key = mrb_nil_value();
+  mrb_value client_key_pw = mrb_nil_value();
 
-  mrb_int kw_num = 1;
+  mrb_int kw_num = 6;
   mrb_int kw_required = 0;
-  mrb_sym kw_names[] = { mrb_intern_lit(mrb, "read_timeout") };
+  mrb_sym kw_names[] = {
+    mrb_intern_lit(mrb, "read_timeout"),
+    mrb_intern_lit(mrb, "alpn_protocols"),
+    mrb_intern_lit(mrb, "ca_chain"),
+    mrb_intern_lit(mrb, "client_cert"),
+    mrb_intern_lit(mrb, "client_key"),
+    mrb_intern_lit(mrb, "client_key_password")
+  };
   mrb_value kw_values[kw_num];
   mrb_kwargs kwargs = { kw_num, kw_required, kw_names, kw_values, NULL };
   mrb_get_args(mrb, ":", &kwargs);
-  if (!mrb_undef_p(kw_values[0])) {
-    timeout_ms = mrb_as_int(mrb, kw_values[0]);
-  }
+  if (!mrb_undef_p(kw_values[0])) timeout_ms    = mrb_as_int(mrb, kw_values[0]);
+  if (!mrb_undef_p(kw_values[1])) alpn_protos   = kw_values[1];
+  if (!mrb_undef_p(kw_values[2])) ca_chain      = kw_values[2];
+  if (!mrb_undef_p(kw_values[3])) client_cert   = kw_values[3];
+  if (!mrb_undef_p(kw_values[4])) client_key    = kw_values[4];
+  if (!mrb_undef_p(kw_values[5])) client_key_pw = kw_values[5];
 
 #if MBEDTLS_VERSION_MAJOR == 1 && MBEDTLS_VERSION_MINOR == 1
   ssl_session *ssn;
@@ -230,8 +248,67 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   mbedtls_ssl_config_defaults( conf, MBEDTLS_SSL_IS_CLIENT,
       MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT );
 
-  if (timeout_ms != 0) {
+  if (!mrb_undef_p(kw_values[0])) {
     mbedtls_ssl_conf_read_timeout(conf, timeout_ms);
+  }
+
+  if (!mrb_nil_p(alpn_protos)) {
+    mrb_int len = RARRAY_LEN(alpn_protos);
+    const char **alpns = malloc(sizeof(char *) * (len + 1));
+    for (mrb_int i = 0; i < len; i++) {
+      // alpns[i] = mrb_str_to_cstr(mrb, RARRAY_PTR(alpn_protos)[i]);
+      mrb_gc_protect(mrb, RARRAY_PTR(alpn_protos)[i]);
+      alpns[i] = RSTRING_PTR(RARRAY_PTR(alpn_protos)[i]);
+    }
+    alpns[len] = NULL;
+    int rc = mbedtls_ssl_conf_alpn_protocols(conf, alpns);
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "alpn_protocols: mbedtls_ssl_conf_alpn_protocols returned %d\n\n", rc);
+  }
+
+  if (!mrb_nil_p(ca_chain)) {
+    mrb_gc_protect(mrb, ca_chain);
+    mrb_str_cat(mrb, ca_chain, "\0", 1);
+    int rc = 0;
+    mbedtls_x509_crt *chain = malloc(sizeof(mbedtls_x509_crt));
+    mbedtls_x509_crt_init(chain);
+    rc = mbedtls_x509_crt_parse(chain, (const unsigned char *) RSTRING_PTR(ca_chain), RSTRING_LEN(ca_chain));
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "ca_chain: mbedtls_x509_crt_parse returned %d\n\n", rc);
+    mbedtls_ssl_conf_ca_chain(conf, chain, NULL);
+  }
+  
+  if (!mrb_nil_p(client_key) || !mrb_nil_p(client_cert)) {
+    if (mrb_nil_p(client_key) || mrb_nil_p(client_cert))
+      mrb_raisef(mrb, E_ARGUMENT_ERROR, ":client_key and :client_cert must be provided together");
+
+    mbedtls_x509_crt *cert = malloc(sizeof(mbedtls_x509_crt));
+    mbedtls_pk_context *pkey = malloc(sizeof(mbedtls_pk_context));
+    mbedtls_x509_crt_init(cert);
+    mbedtls_pk_init(pkey);
+    int rc = 0;
+
+    mrb_gc_protect(mrb, client_cert);
+    mrb_gc_protect(mrb, client_key);
+    mrb_str_cat(mrb, client_cert, "\0", 1);
+    mrb_str_cat(mrb, client_key, "\0", 1);
+    if (!mrb_nil_p(client_key_pw)) {
+      mrb_str_cat(mrb, client_key_pw, "\0", 1);
+      mrb_gc_protect(mrb, client_key_pw);
+    }
+    rc = mbedtls_x509_crt_parse(cert, (const unsigned char *) RSTRING_PTR(client_cert), RSTRING_LEN(client_cert));
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "client_cert: mbedtls_x509_crt_parse returned %d\n\n", rc);
+
+    rc = mbedtls_pk_parse_key(pkey, (const unsigned char *) RSTRING_PTR(client_key), RSTRING_LEN(client_key),
+                              mrb_nil_p(client_key_pw) ? NULL : (const unsigned char *) RSTRING_PTR(client_key_pw),
+                              mrb_nil_p(client_key_pw) ? 0    : RSTRING_LEN(client_key_pw));
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "client_key: mbedtls_pk_parse_key returned %d\n\n", rc);
+
+    rc = mbedtls_ssl_conf_own_cert(conf, cert, pkey);
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "client_cert: mbedtls_ssl_conf_own_cert returned %d\n\n", rc);
   }
 
 #if defined(MRUBY_MBEDTLS_DEBUG_C)
@@ -293,7 +370,12 @@ static mrb_value mrb_ssl_set_socket(mrb_state *mrb, mrb_value self) {
   mrb_data_check_type(mrb, socket, &mrb_io_type);
   fptr = DATA_CHECK_GET_PTR(mrb, socket, &mrb_io_type, struct mrb_io);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, mbedtls_net_recv, mbedtls_net_recv_timeout );
+  // choose correct recv callback depending on blocking or nonblocking socket
+  if ((fcntl( fptr->fd, F_GETFL ) & O_NONBLOCK ) == O_NONBLOCK)
+    mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, mbedtls_net_recv, NULL );
+  else
+    mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
+  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@socket"), socket);
   return mrb_true_value();
 }
 
@@ -412,7 +494,34 @@ static mrb_value mrb_ssl_bytes_available(mrb_state *mrb, mrb_value self) {
   fd = ((mbedtls_net_context *) ssl->p_bio)->fd;
   if (fd) ioctl(fd, FIONREAD, &count);
 
+  // https://esp32.com/viewtopic.php?t=1101
+  if (count <= 0) {
+    mbedtls_ssl_read(ssl, NULL, 0);
+    count = mbedtls_ssl_get_bytes_avail(ssl);
+  }
+
   return mrb_fixnum_value(count);
+}
+
+static mrb_value mrb_ssl_set_blocking(mrb_state *mrb, mrb_value self) {
+  mbedtls_ssl_context *ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  int rc = 0;
+  mrb_bool blocking;
+  mrb_get_args(mrb, "b", &blocking);
+  if (!blocking) {
+    rc = mbedtls_net_set_nonblock((mbedtls_net_context *) ssl->p_bio);
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "mbedtls_net_set_nonblock returned %d", rc);
+    // update recv callback for nonblocking socket
+    mbedtls_ssl_set_bio( ssl, ssl->p_bio, mbedtls_net_send, mbedtls_net_recv, NULL );
+  } else {
+    rc = mbedtls_net_set_block((mbedtls_net_context *) ssl->p_bio);
+    if (rc != 0)
+      mrb_raisef(mrb, E_RUNTIME_ERROR, "mbedtls_net_set_block returned %d", rc);
+    // update recv callback for blocking socket
+    mbedtls_ssl_set_bio( ssl, ssl->p_bio, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
+  }
+  return self;
 }
 
 static mrb_value mrb_ssl_fileno(mrb_state *mrb, mrb_value self) {
@@ -791,6 +900,7 @@ void mrb_mruby_polarssl_gem_init(mrb_state *mrb) {
   mrb_define_method(mrb, s, "fileno", mrb_ssl_fileno, MRB_ARGS_NONE());
   mrb_define_method(mrb, s, "close_notify", mrb_ssl_close_notify, MRB_ARGS_NONE());
   mrb_define_method(mrb, s, "close", mrb_ssl_close, MRB_ARGS_NONE());
+  mrb_define_method(mrb, s, "blocking=", mrb_ssl_set_blocking, MRB_ARGS_REQ(1));
 
   ecdsa = mrb_define_class_under(mrb, pkey, "EC", mrb->object_class);
   MRB_SET_INSTANCE_TT(ecdsa, MRB_TT_DATA);
