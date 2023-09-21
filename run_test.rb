@@ -3,13 +3,14 @@
 # mrbgems test runner
 #
 
+MRUBY_VERSION = ENV['MRUBY_VERSION'] || '3.2.0'
 if __FILE__ == $0
-  repository, dir = 'https://github.com/mruby/mruby.git', 'tmp/mruby'
+  repository, dir = 'https://github.com/mruby/mruby.git', "tmp/mruby-#{MRUBY_VERSION}"
   build_args = ARGV
 
   Dir.mkdir 'tmp'  unless File.exist?('tmp')
   unless File.exist?(dir)
-    system "git clone #{repository} --branch 3.2.0 #{dir}"
+    system "git clone #{repository} --branch #{MRUBY_VERSION} #{dir}"
   end
 
   exit system(%Q[cd #{dir}; MRUBY_CONFIG=#{File.expand_path __FILE__} ruby minirake #{build_args.join(' ')}])

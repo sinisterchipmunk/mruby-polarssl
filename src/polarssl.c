@@ -208,6 +208,8 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
 
   mrb_int kw_num = 6;
   mrb_int kw_required = 0;
+  mrb_value kw_values[kw_num];
+#if MRUBY_RELEASE_MAJOR == 3
   mrb_sym kw_names[] = {
     mrb_intern_lit(mrb, "read_timeout"),
     mrb_intern_lit(mrb, "alpn_protocols"),
@@ -216,10 +218,20 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
     mrb_intern_lit(mrb, "client_key"),
     mrb_intern_lit(mrb, "client_key_password")
   };
-  mrb_value kw_values[kw_num];
   mrb_kwargs kwargs = { kw_num, kw_required, kw_names, kw_values, NULL };
+#else
+  const char *kw_names[] = {
+    "read_timeout",
+    "alpn_protocols",
+    "ca_chain",
+    "client_cert",
+    "client_key",
+    "client_key_password"
+  };
+  mrb_kwargs kwargs = { kw_num, kw_values, kw_names, kw_required, NULL };
+#endif
   mrb_get_args(mrb, ":", &kwargs);
-  if (!mrb_undef_p(kw_values[0])) timeout_ms    = mrb_as_int(mrb, kw_values[0]);
+  if (!mrb_undef_p(kw_values[0])) timeout_ms    = mrb_int(mrb, kw_values[0]);
   if (!mrb_undef_p(kw_values[1])) alpn_protos   = kw_values[1];
   if (!mrb_undef_p(kw_values[2])) ca_chain      = kw_values[2];
   if (!mrb_undef_p(kw_values[3])) client_cert   = kw_values[3];
