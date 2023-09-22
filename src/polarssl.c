@@ -182,8 +182,8 @@ static mrb_value mrb_ctrdrbg_self_test() {
 }
 
 #define E_MALLOC_FAILED (mrb_class_get_under(mrb,mrb_class_get(mrb, "PolarSSL"),"MallocFailed"))
-#define E_NETWANTREAD (mrb_class_get_under(mrb,mrb_class_get(mrb, "PolarSSL"),"NetWantRead"))
-#define E_NETWANTWRITE (mrb_class_get_under(mrb,mrb_class_get(mrb, "PolarSSL"),"NetWantWrite"))
+#define E_NETWANTREAD (mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"NetWantRead"))
+#define E_NETWANTWRITE (mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"NetWantWrite"))
 #define E_SSL_ERROR (mrb_class_get_under(mrb,mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"SSL"), "Error"))
 #define E_SSL_READ_TIMEOUT (mrb_class_get_under(mrb,mrb_class_get_under(mrb,mrb_module_get(mrb, "PolarSSL"),"SSL"), "ReadTimeoutError"))
 
@@ -445,7 +445,13 @@ static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
   buffer = RSTRING_PTR(msg);
   ret = mbedtls_ssl_write(ssl, (const unsigned char *)buffer, RSTRING_LEN(msg));
   if (ret < 0) {
-    mrb_raise(mrb, E_SSL_ERROR, "ssl_write() returned E_SSL_ERROR");
+    if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+      mrb_raise(mrb, E_NETWANTREAD, "ssl_write() returned MBEDTLS_ERR_SSL_WANT_READ");
+    } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      mrb_raise(mrb, E_NETWANTWRITE, "ssl_write() returned MBEDTLS_ERR_SSL_WANT_WRITE");
+    } else {
+      mrb_raisef(mrb, E_SSL_ERROR, "ssl_write() returned E_SSL_ERROR [%d]", ret);
+    }
   }
   return mrb_true_value();
 }
@@ -468,7 +474,13 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     mrb_raise(mrb, E_SSL_READ_TIMEOUT, "ssl_read() returned E_SSL_READ_TIMEOUT");
     value = mrb_nil_value();
   } else if (ret < 0) {
-    mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d]", ret);
+    if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
+      mrb_raise(mrb, E_NETWANTREAD, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_READ");
+    } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+      mrb_raise(mrb, E_NETWANTWRITE, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_WRITE");
+    } else {
+      mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d]", ret);
+    }
     value = mrb_nil_value();
   } else {
     value = mrb_str_new(mrb, buf, ret);
