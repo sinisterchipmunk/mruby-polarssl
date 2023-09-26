@@ -13,8 +13,8 @@ if Object.const_defined? :PolarSSL
         end
       end
 
-      def debug_message(*)
-        debug.call(*)
+      def debug_message(*args)
+        debug.call(*args)
       end
     end
 

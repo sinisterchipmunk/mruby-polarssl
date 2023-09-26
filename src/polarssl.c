@@ -194,7 +194,7 @@ static void mrb_mbedtls_debug(void *ctx, int level,
     mrb_state *mrb = ctx;
     struct RClass *pssl = mrb_module_get(mrb, "PolarSSL");
     mrb_funcall(mrb, mrb_obj_value(pssl), "debug_message", 4,
-                mrb_int_value(mrb, level), mrb_str_new_cstr(mrb, file), mrb_int_value(mrb, line), mrb_str_new_cstr(mrb, str));
+                mrb_fixnum_value(level), mrb_str_new_cstr(mrb, file), mrb_fixnum_value(line), mrb_str_new_cstr(mrb, str));
 }
 
 static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
@@ -886,7 +886,7 @@ static mrb_value mrb_mbedtls_set_debug_threshold(mrb_state *mrb, mrb_value self)
   mrb_int threshold = 0;
   mrb_get_args(mrb, "i", &threshold);
   mbedtls_debug_set_threshold(threshold);
-  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@debug_threshold"), mrb_int_value(mrb, threshold));
+  mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@debug_threshold"), mrb_fixnum_value(threshold));
   return self;
 }
 
@@ -899,7 +899,7 @@ void mrb_mruby_polarssl_gem_init(mrb_state *mrb) {
   mrb_define_class_method(mrb, p, "debug_threshold=", mrb_mbedtls_set_debug_threshold, MRB_ARGS_REQ(1));
 
   #ifdef MRUBY_MBEDTLS_DEBUG_C
-    mrb_funcall(mrb, p, "debug_threshold=", 1, mrb_int_value(mrb, 5));
+    mrb_funcall(mrb, p, "debug_threshold=", 1, mrb_fixnum_value(5));
   #endif
 
   e = mrb_define_class_under(mrb, p, "Entropy", mrb->object_class);
