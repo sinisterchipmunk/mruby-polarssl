@@ -6,6 +6,26 @@ if Object.const_defined?(:PolarSSL)
     PolarSSL.class == Module
   end
 
+  assert("PollarSSL.debug") do
+    msgs = []
+    begin
+      PolarSSL.debug { |*a| msgs << a }
+      PolarSSL.debug_threshold = 5
+      socket = TCPSocket.new('tls.mbed.org', 443)
+      entropy = PolarSSL::Entropy.new
+      ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
+      ssl = PolarSSL::SSL.new
+      ssl.set_endpoint(PolarSSL::SSL::SSL_IS_CLIENT)
+      ssl.set_authmode(PolarSSL::SSL::SSL_VERIFY_NONE)
+      ssl.set_rng(ctr_drbg)
+      ssl.set_socket(socket)
+      ssl.handshake
+      assert_not_equal [], msgs
+    ensure
+      PolarSSL.debug_threshold = 0
+    end
+  end
+
   assert('PolarSSL::Entropy') do
     PolarSSL::Entropy.class == Class
   end

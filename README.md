@@ -82,7 +82,8 @@ Add flag `MRUBY_MBEDTLS_DEBUG_C` on mrbgem.rake to enable mbedtls debugs via std
 +  spec.cc.flags << '-D_FILE_OFFSET_BITS=64 -Wall -W -Wdeclaration-after-statement -DMRUBY_MBEDTLS_DEBUG_C'
 ```
 
-If customized display is required check `my_debug_func()`.
+If customized display is required use
+`PolarSSL::debug = Proc.new { |level, file, line, message| ... }`.
 
 ## License
 
