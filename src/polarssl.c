@@ -425,7 +425,7 @@ static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_handshake() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raise(mrb, E_SSL_ERROR, "ssl_handshake() returned E_SSL_ERROR");
+      mrb_raisef(mrb, E_SSL_ERROR, "ssl_handshake() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
     }
   }
   return mrb_true_value();
@@ -448,7 +448,7 @@ static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_write() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raisef(mrb, E_SSL_ERROR, "ssl_write() returned E_SSL_ERROR [%d]", ret);
+      mrb_raisef(mrb, E_SSL_ERROR, "ssl_write() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
     }
   }
   return mrb_true_value();
@@ -477,7 +477,7 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d]", ret);
+      mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
     }
     value = mrb_nil_value();
   } else {
