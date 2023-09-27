@@ -201,6 +201,7 @@ if Object.const_defined?(:PolarSSL)
     ssl.handshake
     ssl.write("GET / HTTP/1.0\r\nHost: tls.mbed.org\r\n\r\n")
     response = ""
+    assert_raise(ArgumentError) { ssl.read(-1) }
     while chunk = ssl.read(1024)
       response << chunk
     end

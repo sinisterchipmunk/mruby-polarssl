@@ -462,6 +462,8 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
   int ret;
 
   mrb_get_args(mrb, "i", &maxlen);
+  if (maxlen < 0)
+    mrb_raisef(mrb, E_ARGUMENT_ERROR, "Can't read a negative number (%d) of bytes", maxlen);
 
   buf = malloc(maxlen);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
