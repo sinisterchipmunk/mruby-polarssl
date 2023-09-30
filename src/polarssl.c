@@ -18,6 +18,7 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/version.h"
 #include "mbedtls/debug.h"
+#include "mbedtls/ssl_internal.h" // for mbedtls_ssl_own_key, mbedtls_ssl_own_cert
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -47,7 +48,29 @@ static void mrb_ssl_free(mrb_state *mrb, void *ptr) {
 
   if (ssl != NULL) {
     if (ssl->conf != NULL) {
-      mbedtls_ssl_config_free((mbedtls_ssl_config  *)ssl->conf);
+      mbedtls_ssl_config *conf = (mbedtls_ssl_config *) ssl->conf;
+      if (conf->alpn_list) {
+        free((char *) conf->alpn_list);
+        conf->alpn_list = NULL;
+      }
+      if (conf->ca_chain) {
+        mbedtls_x509_crt_free(conf->ca_chain);
+        mrb_free(mrb, conf->ca_chain);
+        conf->ca_chain = NULL;
+      }
+      if (conf->key_cert) {
+        mbedtls_pk_context *pk  = mbedtls_ssl_own_key(ssl);
+        mbedtls_x509_crt   *crt = mbedtls_ssl_own_cert(ssl);
+        if (pk) {
+          mbedtls_pk_free(pk);
+          mrb_free(mrb, pk);
+        }
+        if (crt) {
+          mbedtls_x509_crt_free(crt);
+          mrb_free(mrb, crt);
+        }
+      }
+      mbedtls_ssl_config_free(conf);
       mrb_free(mrb, (mbedtls_ssl_config  *)ssl->conf);
       ssl->conf = NULL;
     }
@@ -465,7 +488,7 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
   if (maxlen < 0)
     mrb_raisef(mrb, E_ARGUMENT_ERROR, "Can't read a negative number (%d) of bytes", maxlen);
 
-  buf = malloc(maxlen);
+  buf = mrb_malloc(mrb, maxlen);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
   ret = mbedtls_ssl_read(ssl, (unsigned char *)buf, maxlen);
   if ( ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || buf == NULL) {
@@ -486,7 +509,7 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     value = mrb_str_new(mrb, buf, ret);
   }
 
-  if(buf != NULL) free(buf);
+  if(buf != NULL) mrb_free(mrb, buf);
   return value;
 }
 
