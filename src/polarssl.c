@@ -18,7 +18,7 @@
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/version.h"
 #include "mbedtls/debug.h"
-#include "mbedtls/ssl_internal.h" // for mbedtls_ssl_own_key, mbedtls_ssl_own_cert
+// #include "mbedtls/ssl_misc.h" // for mbedtls_ssl_own_key, mbedtls_ssl_own_cert
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -43,40 +43,27 @@ static struct RClass *mrb_module_get(mrb_state *mrb, const char *name) {
 
 extern struct mrb_data_type mrb_io_type;
 
+typedef struct {
+  mbedtls_ssl_context ssl;
+  mbedtls_ssl_config conf;
+  const char **alpns;
+  mbedtls_x509_crt ca_chain;
+  mbedtls_x509_crt client_cert;
+  mbedtls_pk_context client_pkey;
+  struct mrb_io *fptr;
+} mrb_ssl_t;
+
 static void mrb_ssl_free(mrb_state *mrb, void *ptr) {
-  mbedtls_ssl_context *ssl = ptr;
+  mrb_ssl_t *mrbssl = ptr;
 
-  if (ssl != NULL) {
-    if (ssl->conf != NULL) {
-      mbedtls_ssl_config *conf = (mbedtls_ssl_config *) ssl->conf;
-      if (conf->alpn_list) {
-        free((char *) conf->alpn_list);
-        conf->alpn_list = NULL;
-      }
-      if (conf->ca_chain) {
-        mbedtls_x509_crt_free(conf->ca_chain);
-        mrb_free(mrb, conf->ca_chain);
-        conf->ca_chain = NULL;
-      }
-      if (conf->key_cert) {
-        mbedtls_pk_context *pk  = mbedtls_ssl_own_key(ssl);
-        mbedtls_x509_crt   *crt = mbedtls_ssl_own_cert(ssl);
-        if (pk) {
-          mbedtls_pk_free(pk);
-          mrb_free(mrb, pk);
-        }
-        if (crt) {
-          mbedtls_x509_crt_free(crt);
-          mrb_free(mrb, crt);
-        }
-      }
-      mbedtls_ssl_config_free(conf);
-      mrb_free(mrb, (mbedtls_ssl_config  *)ssl->conf);
-      ssl->conf = NULL;
-    }
-
-    mbedtls_ssl_free(ssl);
-    mrb_free(mrb, ssl);
+  if (mrbssl != NULL) {
+    mbedtls_ssl_free(&mrbssl->ssl);
+    mbedtls_ssl_config_free(&mrbssl->conf);
+    mbedtls_x509_crt_free(&mrbssl->ca_chain);
+    mbedtls_pk_free(&mrbssl->client_pkey);
+    mbedtls_x509_crt_free(&mrbssl->client_cert);
+    mrb_free(mrb, mrbssl->alpns);
+    mrb_free(mrb, mrbssl);
   }
 }
 
@@ -220,9 +207,27 @@ static void mrb_mbedtls_debug(void *ctx, int level,
                 mrb_fixnum_value(level), mrb_str_new_cstr(mrb, file), mrb_fixnum_value(line), mrb_str_new_cstr(mrb, str));
 }
 
+static int mbedtls_pk_parse_key_default_rng(mbedtls_pk_context *ctx,
+                                            const unsigned char *key, size_t keylen,
+                                            const unsigned char *pwd, size_t pwdlen)
+{
+  int rc = 0;
+  mbedtls_entropy_context entropy;
+  mbedtls_ctr_drbg_context ctr_drbg;
+  mbedtls_entropy_init(&entropy);
+  mbedtls_ctr_drbg_init(&ctr_drbg);
+  rc = mbedtls_ctr_drbg_seed(&ctr_drbg, mbedtls_entropy_func, &entropy, NULL, 0);
+  if (rc == 0) {
+    rc = mbedtls_pk_parse_key(ctx, key, keylen, pwd, pwdlen,
+                              &mbedtls_ctr_drbg_random, &ctr_drbg);
+  }
+  mbedtls_ctr_drbg_free(&ctr_drbg);
+  mbedtls_entropy_free(&entropy);
+  return rc;
+}
+
 static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
-  mbedtls_ssl_config *conf;
+  mrb_ssl_t *mrbssl = NULL;
   mrb_int timeout_ms = 0;
   mrb_value alpn_protos = mrb_nil_value();
   mrb_value ca_chain = mrb_nil_value();
@@ -262,44 +267,37 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
   if (!mrb_undef_p(kw_values[4])) client_key    = kw_values[4];
   if (!mrb_undef_p(kw_values[5])) client_key_pw = kw_values[5];
 
-#if MBEDTLS_VERSION_MAJOR == 1 && MBEDTLS_VERSION_MINOR == 1
-  ssl_session *ssn;
-#endif
-
-  ssl = (mbedtls_ssl_context *)DATA_PTR(self);
-  if (ssl) {
-    mrb_ssl_free(mrb, ssl);
+  mrbssl = (mrb_ssl_t *) DATA_PTR(self);
+  if (mrbssl) {
+    mrb_ssl_free(mrb, mrbssl);
   }
   DATA_TYPE(self) = &mrb_ssl_type;
   DATA_PTR(self) = NULL;
 
-  ssl = (mbedtls_ssl_context *)mrb_malloc(mrb, sizeof(mbedtls_ssl_context));
-  DATA_PTR(self) = ssl;
+  mrbssl = (mrb_ssl_t *)mrb_malloc(mrb, sizeof(mrb_ssl_t));
+  memset(mrbssl, 0, sizeof(mrb_ssl_t));
+  DATA_PTR(self) = mrbssl;
 
-  mbedtls_ssl_init(ssl);
-
-  conf = (mbedtls_ssl_config *)mrb_malloc(mrb, sizeof(mbedtls_ssl_config));
-  mbedtls_ssl_config_init( conf );
-
-  mbedtls_ssl_conf_dbg(conf, mrb_mbedtls_debug, mrb);
-
-  mbedtls_ssl_config_defaults( conf, MBEDTLS_SSL_IS_CLIENT,
-      MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT );
+  mbedtls_ssl_init(&mrbssl->ssl);
+  mbedtls_ssl_config_init(&mrbssl->conf);
+  mbedtls_ssl_conf_dbg(&mrbssl->conf, mrb_mbedtls_debug, mrb);
+  mbedtls_ssl_config_defaults(&mrbssl->conf, MBEDTLS_SSL_IS_CLIENT,
+      MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
 
   if (!mrb_undef_p(kw_values[0])) {
-    mbedtls_ssl_conf_read_timeout(conf, timeout_ms);
+    mbedtls_ssl_conf_read_timeout(&mrbssl->conf, timeout_ms);
   }
 
   if (!mrb_nil_p(alpn_protos)) {
     int rc = 0;
     mrb_int len = RARRAY_LEN(alpn_protos);
-    const char **alpns = mrb_malloc(mrb, sizeof(char *) * (len + 1));
+    mrbssl->alpns = mrb_malloc(mrb, sizeof(char *) * (len + 1));
     for (mrb_int i = 0; i < len; i++) {
       mrb_gc_protect(mrb, RARRAY_PTR(alpn_protos)[i]);
-      alpns[i] = RSTRING_PTR(RARRAY_PTR(alpn_protos)[i]);
+      mrbssl->alpns[i] = RSTRING_PTR(RARRAY_PTR(alpn_protos)[i]);
     }
-    alpns[len] = NULL;
-    rc = mbedtls_ssl_conf_alpn_protocols(conf, alpns);
+    mrbssl->alpns[len] = NULL;
+    rc = mbedtls_ssl_conf_alpn_protocols(&mrbssl->conf, mrbssl->alpns);
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "alpn_protocols: mbedtls_ssl_conf_alpn_protocols returned %d\n\n", rc);
   }
@@ -308,12 +306,11 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
     int rc = 0;
     mrb_gc_protect(mrb, ca_chain);
     mrb_str_cat(mrb, ca_chain, "\0", 1);
-    mbedtls_x509_crt *chain = mrb_malloc(mrb, sizeof(mbedtls_x509_crt));
-    mbedtls_x509_crt_init(chain);
-    rc = mbedtls_x509_crt_parse(chain, (const unsigned char *) RSTRING_PTR(ca_chain), RSTRING_LEN(ca_chain));
+    mbedtls_x509_crt_init(&mrbssl->ca_chain);
+    rc = mbedtls_x509_crt_parse(&mrbssl->ca_chain, (const unsigned char *) RSTRING_PTR(ca_chain), RSTRING_LEN(ca_chain));
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "ca_chain: mbedtls_x509_crt_parse returned %d\n\n", rc);
-    mbedtls_ssl_conf_ca_chain(conf, chain, NULL);
+    mbedtls_ssl_conf_ca_chain(&mrbssl->conf, &mrbssl->ca_chain, NULL);
   }
   
   if (!mrb_nil_p(client_key) || !mrb_nil_p(client_cert)) {
@@ -321,10 +318,8 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
     if (mrb_nil_p(client_key) || mrb_nil_p(client_cert))
       mrb_raisef(mrb, E_ARGUMENT_ERROR, ":client_key and :client_cert must be provided together");
 
-    mbedtls_x509_crt *cert = mrb_malloc(mrb, sizeof(mbedtls_x509_crt));
-    mbedtls_pk_context *pkey = mrb_malloc(mrb, sizeof(mbedtls_pk_context));
-    mbedtls_x509_crt_init(cert);
-    mbedtls_pk_init(pkey);
+    mbedtls_x509_crt_init(&mrbssl->client_cert);
+    mbedtls_pk_init(&mrbssl->client_pkey);
 
     mrb_gc_protect(mrb, client_cert);
     mrb_gc_protect(mrb, client_key);
@@ -334,92 +329,91 @@ static mrb_value mrb_ssl_initialize(mrb_state *mrb, mrb_value self) {
       mrb_str_cat(mrb, client_key_pw, "\0", 1);
       mrb_gc_protect(mrb, client_key_pw);
     }
-    rc = mbedtls_x509_crt_parse(cert, (const unsigned char *) RSTRING_PTR(client_cert), RSTRING_LEN(client_cert));
+    rc = mbedtls_x509_crt_parse(&mrbssl->client_cert, (const unsigned char *) RSTRING_PTR(client_cert), RSTRING_LEN(client_cert));
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "client_cert: mbedtls_x509_crt_parse returned %d\n\n", rc);
 
-    rc = mbedtls_pk_parse_key(pkey, (const unsigned char *) RSTRING_PTR(client_key), RSTRING_LEN(client_key),
-                              mrb_nil_p(client_key_pw) ? NULL : (const unsigned char *) RSTRING_PTR(client_key_pw),
-                              mrb_nil_p(client_key_pw) ? 0    : RSTRING_LEN(client_key_pw));
+    // mbedtls 3.0.0 adds RNG requirement to PK parsing. For this we need
+    // Entropy and CtrDrbg.
+    rc = mbedtls_pk_parse_key_default_rng(&mrbssl->client_pkey,
+                                          (const unsigned char *) RSTRING_PTR(client_key),
+                                          RSTRING_LEN(client_key),
+                                          mrb_nil_p(client_key_pw) ? NULL : (const unsigned char *) RSTRING_PTR(client_key_pw),
+                                          mrb_nil_p(client_key_pw) ? 0    : RSTRING_LEN(client_key_pw));
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "client_key: mbedtls_pk_parse_key returned %d\n\n", rc);
 
-    rc = mbedtls_ssl_conf_own_cert(conf, cert, pkey);
+    rc = mbedtls_ssl_conf_own_cert(&mrbssl->conf, &mrbssl->client_cert, &mrbssl->client_pkey);
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "client_cert: mbedtls_ssl_conf_own_cert returned %d\n\n", rc);
   }
 
-  mbedtls_ssl_setup( ssl, conf );
-
-#if MBEDTLS_VERSION_MAJOR == 1 && MBEDTLS_VERSION_MINOR == 1
-  ssn = (ssl_session *)mrb_malloc(mrb, sizeof(ssl_session));
-  ssl_set_session( ssl, 0, 600, ssn );
-  ssl_set_ciphersuites( ssl, ssl_default_ciphersuites );
-#endif
+  mbedtls_ssl_setup( &mrbssl->ssl, &mrbssl->conf );
 
   return self;
 }
 
 static mrb_value mrb_ssl_set_endpoint(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_int endpoint_mode;
 
   mrb_get_args(mrb, "i", &endpoint_mode);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  mbedtls_ssl_conf_authmode((mbedtls_ssl_config  *)ssl->conf, endpoint_mode);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  mbedtls_ssl_conf_authmode(&ssl->conf, endpoint_mode);
   return mrb_true_value();
 }
 
 static mrb_value mrb_ssl_set_authmode(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_int authmode;
 
   mrb_get_args(mrb, "i", &authmode);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  mbedtls_ssl_conf_authmode((mbedtls_ssl_config  *)ssl->conf, authmode);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  mbedtls_ssl_conf_authmode(&ssl->conf, authmode);
   return mrb_true_value();
 }
 
 static mrb_value mrb_ssl_set_rng(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mbedtls_ctr_drbg_context *ctr_drbg;
   mrb_value rng;
 
   mrb_get_args(mrb, "o", &rng);
   mrb_data_check_type(mrb, rng, &mrb_ctr_drbg_type);
   ctr_drbg = DATA_CHECK_GET_PTR(mrb, rng, &mrb_ctr_drbg_type, mbedtls_ctr_drbg_context);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
 
-  mbedtls_ssl_conf_rng((mbedtls_ssl_config  *)ssl->conf, &mbedtls_ctr_drbg_random, ctr_drbg);
+  mbedtls_ssl_conf_rng(&ssl->conf, &mbedtls_ctr_drbg_random, ctr_drbg);
   return mrb_true_value();
 }
 
 static mrb_value mrb_ssl_set_socket(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   struct mrb_io *fptr;
   mrb_value socket;
 
   mrb_get_args(mrb, "o", &socket);
   mrb_data_check_type(mrb, socket, &mrb_io_type);
   fptr = DATA_CHECK_GET_PTR(mrb, socket, &mrb_io_type, struct mrb_io);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  ssl->fptr = fptr;
   // choose correct recv callback depending on blocking or nonblocking socket
   if ((fcntl( fptr->fd, F_GETFL ) & O_NONBLOCK ) == O_NONBLOCK)
-    mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, mbedtls_net_recv, NULL );
+    mbedtls_ssl_set_bio( &ssl->ssl, fptr, mbedtls_net_send, mbedtls_net_recv, NULL );
   else
-    mbedtls_ssl_set_bio( ssl, fptr, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
+    mbedtls_ssl_set_bio( &ssl->ssl, fptr, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
   mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@socket"), socket);
   return mrb_true_value();
 }
 
 static mrb_value mrb_ssl_set_hostname(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_value hostname;
 
   mrb_get_args(mrb, "S", &hostname);
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  mbedtls_ssl_set_hostname(ssl, RSTRING_PTR(hostname));
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  mbedtls_ssl_set_hostname(&ssl->ssl, RSTRING_PTR(hostname));
 
   return mrb_true_value();
 }
@@ -432,12 +426,12 @@ static int mbedtls_status_is_ssl_in_progress( int ret )
 }
 
 static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   int ret;
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
 
-  while( ( ret = mbedtls_ssl_handshake( ssl ) ) != 0 ) {
+  while( ( ret = mbedtls_ssl_handshake( &ssl->ssl ) ) != 0 ) {
     if( ! mbedtls_status_is_ssl_in_progress( ret ) )
       break;
   }
@@ -455,16 +449,16 @@ static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
 }
 
 static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_value msg;
   char *buffer;
   int ret;
 
   mrb_get_args(mrb, "S", &msg);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
 
   buffer = RSTRING_PTR(msg);
-  ret = mbedtls_ssl_write(ssl, (const unsigned char *)buffer, RSTRING_LEN(msg));
+  ret = mbedtls_ssl_write(&ssl->ssl, (const unsigned char *)buffer, RSTRING_LEN(msg));
   if (ret < 0) {
     if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
       mrb_raise(mrb, E_NETWANTREAD, "ssl_write() returned MBEDTLS_ERR_SSL_WANT_READ");
@@ -478,7 +472,7 @@ static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
 }
 
 static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_int maxlen = 0;
   mrb_value value;
   char *buf;
@@ -489,8 +483,8 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     mrb_raisef(mrb, E_ARGUMENT_ERROR, "Can't read a negative number (%d) of bytes", maxlen);
 
   buf = mrb_malloc(mrb, maxlen);
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  ret = mbedtls_ssl_read(ssl, (unsigned char *)buf, maxlen);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  ret = mbedtls_ssl_read(&ssl->ssl, (unsigned char *)buf, maxlen);
   if ( ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || buf == NULL) {
     value = mrb_nil_value();
   } else if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
@@ -514,12 +508,12 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
 }
 
 static mrb_value mrb_ssl_close_notify(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   int ret;
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
 
-  ret = mbedtls_ssl_close_notify(ssl);
+  ret = mbedtls_ssl_close_notify(&ssl->ssl);
   if (ret < 0) {
     mrb_raise(mrb, E_SSL_ERROR, "ssl_close_notify() returned E_SSL_ERROR");
   }
@@ -527,56 +521,56 @@ static mrb_value mrb_ssl_close_notify(mrb_state *mrb, mrb_value self) {
 }
 
 static mrb_value mrb_ssl_close(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
   return mrb_true_value();
 }
 
 static mrb_value mrb_ssl_bytes_available(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_int count=0, fd=0;
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  fd = ((mbedtls_net_context *) ssl->p_bio)->fd;
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  fd = ((mbedtls_net_context *) ssl->fptr)->fd;
   if (fd) ioctl(fd, FIONREAD, &count);
 
   // https://esp32.com/viewtopic.php?t=1101
   if (count <= 0) {
-    mbedtls_ssl_read(ssl, NULL, 0);
-    count = mbedtls_ssl_get_bytes_avail(ssl);
+    mbedtls_ssl_read(&ssl->ssl, NULL, 0);
+    count = mbedtls_ssl_get_bytes_avail(&ssl->ssl);
   }
 
   return mrb_fixnum_value(count);
 }
 
 static mrb_value mrb_ssl_set_blocking(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
+  mrb_ssl_t *ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
   int rc = 0;
   mrb_bool blocking;
   mrb_get_args(mrb, "b", &blocking);
   if (!blocking) {
-    rc = mbedtls_net_set_nonblock((mbedtls_net_context *) ssl->p_bio);
+    rc = mbedtls_net_set_nonblock((mbedtls_net_context *) ssl->fptr);
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "mbedtls_net_set_nonblock returned %d", rc);
     // update recv callback for nonblocking socket
-    mbedtls_ssl_set_bio( ssl, ssl->p_bio, mbedtls_net_send, mbedtls_net_recv, NULL );
+    mbedtls_ssl_set_bio( &ssl->ssl, ssl->fptr, mbedtls_net_send, mbedtls_net_recv, NULL );
   } else {
-    rc = mbedtls_net_set_block((mbedtls_net_context *) ssl->p_bio);
+    rc = mbedtls_net_set_block((mbedtls_net_context *) ssl->fptr);
     if (rc != 0)
       mrb_raisef(mrb, E_RUNTIME_ERROR, "mbedtls_net_set_block returned %d", rc);
     // update recv callback for blocking socket
-    mbedtls_ssl_set_bio( ssl, ssl->p_bio, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
+    mbedtls_ssl_set_bio( &ssl->ssl, ssl->fptr, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
   }
   return self;
 }
 
 static mrb_value mrb_ssl_fileno(mrb_state *mrb, mrb_value self) {
-  mbedtls_ssl_context *ssl;
+  mrb_ssl_t *ssl;
   mrb_int fd=0;
 
-  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mbedtls_ssl_context);
-  fd = ((mbedtls_net_context *) ssl->p_bio)->fd;
+  ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  fd = ((mbedtls_net_context *) ssl->fptr)->fd;
 
   return mrb_fixnum_value(fd);
 }
@@ -641,12 +635,20 @@ static mrb_value mrb_ecdsa_load_pem(mrb_state *mrb, mrb_value self) {
   mrb_value pem;
   int ret = 0;
   char error[30] = {0};
+  mrb_value obj = mrb_iv_get(mrb, self, mrb_intern_lit(mrb, "@ctr_drbg"));
+  mbedtls_ctr_drbg_context *ctr_drbg;
 
   mrb_get_args(mrb, "S", &pem);
 
   mbedtls_pk_init( &pkey );
 
-  ret = mbedtls_pk_parse_key(&pkey, (const unsigned char *)RSTRING_PTR(pem), RSTRING_LEN(pem)+1, NULL, 0);
+  if (mrb_nil_p(obj)) {
+    ret = mbedtls_pk_parse_key_default_rng(&pkey, (const unsigned char *)RSTRING_PTR(pem), RSTRING_LEN(pem)+1, NULL, 0);
+  } else {
+    ctr_drbg = DATA_CHECK_GET_PTR(mrb, obj, &mrb_ctr_drbg_type, mbedtls_ctr_drbg_context);
+    ret = mbedtls_pk_parse_key(&pkey, (const unsigned char *)RSTRING_PTR(pem), RSTRING_LEN(pem)+1, NULL, 0,
+                               mbedtls_ctr_drbg_random, ctr_drbg);
+  }
   if (ret == 0) {
     ecdsa = DATA_CHECK_GET_PTR(mrb, self, &mrb_ecdsa_type, mbedtls_ecdsa_context);
     ret = mbedtls_ecdsa_from_keypair(ecdsa, mbedtls_pk_ec(pkey));
@@ -676,7 +678,8 @@ static mrb_value mrb_ecdsa_public_key(mrb_state *mrb, mrb_value self) {
   memset(&str, 0, sizeof(str));
   memset(&buf, 0, sizeof(buf));
 
-  if( mbedtls_ecp_point_write_binary( &ecdsa->grp, &ecdsa->Q,
+  if( mbedtls_ecp_point_write_binary( &ecdsa->MBEDTLS_PRIVATE(grp),
+        &ecdsa->MBEDTLS_PRIVATE(Q),
         MBEDTLS_ECP_PF_COMPRESSED, &len, buf, sizeof(buf) ) != 0 )
   {
     mrb_raise(mrb, E_RUNTIME_ERROR, "can't extract Public Key");
@@ -702,7 +705,8 @@ static mrb_value mrb_ecdsa_private_key(mrb_state *mrb, mrb_value self) {
   memset(&str, 0, sizeof(str));
   memset(&buf, 0, sizeof(buf));
 
-  if( mbedtls_ecp_point_write_binary( &ecdsa->grp, (mbedtls_ecp_point *)&ecdsa->d,
+  if( mbedtls_ecp_point_write_binary( &ecdsa->MBEDTLS_PRIVATE(grp),
+        (mbedtls_ecp_point *)&ecdsa->MBEDTLS_PRIVATE(d),
         MBEDTLS_ECP_PF_COMPRESSED, &len, buf, sizeof(buf) ) != 0 )
   {
     mrb_raise(mrb, E_RUNTIME_ERROR, "can't extract Public Key");
@@ -735,7 +739,7 @@ static mrb_value mrb_ecdsa_sign(mrb_state *mrb, mrb_value self) {
   ctr_drbg = DATA_CHECK_GET_PTR(mrb, obj, &mrb_ctr_drbg_type, mbedtls_ctr_drbg_context);
 
   ret = mbedtls_ecdsa_write_signature(ecdsa, MBEDTLS_MD_SHA256, (unsigned char *)RSTRING_PTR(hash), RSTRING_LEN(hash),
-      buf, &len, mbedtls_ctr_drbg_random, ctr_drbg);
+      buf, sizeof(buf), &len, mbedtls_ctr_drbg_random, ctr_drbg);
 
   for(i=0, j=0; i < (int)len; i++,j+=2) {
     sprintf((char *)&str[j], "%c%c", "0123456789ABCDEF" [buf[i] / 16],
