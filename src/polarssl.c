@@ -425,6 +425,14 @@ static int mbedtls_status_is_ssl_in_progress( int ret )
       ret == MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS );
 }
 
+static void mrb_raise_ssl_error(mrb_state *mrb, const char *funcname, int rc) {
+  // use sprintf because mrb_raisef doesn't support %x.
+  // mruby-sprintf does but would add a dependency.
+  char code[32];
+  sprintf(code, "%d, -0x%X", rc, (unsigned) -rc);
+  mrb_raisef(mrb, E_SSL_ERROR, "%s returned E_SSL_ERROR [%s]", funcname, code);
+}
+
 static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
   mrb_ssl_t *ssl;
   int ret;
@@ -442,7 +450,7 @@ static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_handshake() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raisef(mrb, E_SSL_ERROR, "ssl_handshake() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
+      mrb_raise_ssl_error(mrb, "ssl_handshake()", ret);
     }
   }
   return mrb_true_value();
@@ -465,7 +473,7 @@ static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_write() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raisef(mrb, E_SSL_ERROR, "ssl_write() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
+      mrb_raise_ssl_error(mrb, "ssl_write()", ret);
     }
   }
   return mrb_true_value();
@@ -496,7 +504,7 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
       mrb_raise(mrb, E_NETWANTWRITE, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_WRITE");
     } else {
-      mrb_raisef(mrb, E_SSL_ERROR, "ssl_read() returned E_SSL_ERROR [%d, -0x%x]", ret, (unsigned) -ret);
+      mrb_raise_ssl_error(mrb, "ssl_read()", ret);
     }
     value = mrb_nil_value();
   } else {
