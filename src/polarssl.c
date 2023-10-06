@@ -11,6 +11,7 @@
 /*#include "mruby/ext/context_log.h"*/
 
 #include "mbedtls/entropy.h"
+#include "mbedtls/error.h" // for mbedtls_strerror
 #include "mbedtls/ctr_drbg.h"
 #include "mbedtls/ssl.h"
 #include "mbedtls/des.h"
@@ -428,9 +429,10 @@ static int mbedtls_status_is_ssl_in_progress( int ret )
 static void mrb_raise_ssl_error(mrb_state *mrb, const char *funcname, int rc) {
   // use sprintf because mrb_raisef doesn't support %x.
   // mruby-sprintf does but would add a dependency.
-  char code[32];
-  sprintf(code, "%d, -0x%X", rc, (unsigned) -rc);
-  mrb_raisef(mrb, E_SSL_ERROR, "%s returned E_SSL_ERROR [%s]", funcname, code);
+  char buf[256];
+  sprintf(buf, "%d, -0x%X: ", rc, (unsigned) -rc);
+  mbedtls_strerror(rc, buf + strlen(buf), sizeof(buf) - strlen(buf));
+  mrb_raisef(mrb, E_SSL_ERROR, "%s returned E_SSL_ERROR [%s]", funcname, buf);
 }
 
 static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
@@ -489,16 +491,23 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
   mrb_get_args(mrb, "i", &maxlen);
   if (maxlen < 0)
     mrb_raisef(mrb, E_ARGUMENT_ERROR, "Can't read a negative number (%d) of bytes", maxlen);
+  if (mrb_test(mrb_iv_get(mrb, self, mrb_intern_lit(mrb, "@eof"))))
+    mrb_raise(mrb, mrb_class_get(mrb, "EOFError"), "EOF");
 
   buf = mrb_malloc(mrb, maxlen);
+  memset(buf, 0, maxlen);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
   ret = mbedtls_ssl_read(&ssl->ssl, (unsigned char *)buf, maxlen);
-  if ( ret == 0 || ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || buf == NULL) {
+  if ( ret == 0 || buf == NULL) {
+    value = mrb_nil_value();
+  } else if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+    mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@eof"), mrb_true_value());
     value = mrb_nil_value();
   } else if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
+    free(buf);
     mrb_raise(mrb, E_SSL_READ_TIMEOUT, "ssl_read() returned E_SSL_READ_TIMEOUT");
-    value = mrb_nil_value();
   } else if (ret < 0) {
+    free(buf);
     if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
       mrb_raise(mrb, E_NETWANTREAD, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_READ");
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
@@ -506,7 +515,6 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     } else {
       mrb_raise_ssl_error(mrb, "ssl_read()", ret);
     }
-    value = mrb_nil_value();
   } else {
     value = mrb_str_new(mrb, buf, ret);
   }
@@ -571,6 +579,14 @@ static mrb_value mrb_ssl_set_blocking(mrb_state *mrb, mrb_value self) {
     mbedtls_ssl_set_bio( &ssl->ssl, ssl->fptr, mbedtls_net_send, NULL, mbedtls_net_recv_timeout );
   }
   return self;
+}
+
+static mrb_value mrb_ssl_set_read_timeout(mrb_state *mrb, mrb_value self) {
+  mrb_ssl_t *mrbssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
+  mrb_int timeout_ms;
+  mrb_get_args(mrb, "i", &timeout_ms);
+  mbedtls_ssl_conf_read_timeout(&mrbssl->conf, timeout_ms);
+  return mrb_int_value(mrb, timeout_ms);
 }
 
 static mrb_value mrb_ssl_fileno(mrb_state *mrb, mrb_value self) {
@@ -974,6 +990,7 @@ void mrb_mruby_polarssl_gem_init(mrb_state *mrb) {
   mrb_define_method(mrb, s, "close_notify", mrb_ssl_close_notify, MRB_ARGS_NONE());
   mrb_define_method(mrb, s, "close", mrb_ssl_close, MRB_ARGS_NONE());
   mrb_define_method(mrb, s, "blocking=", mrb_ssl_set_blocking, MRB_ARGS_REQ(1));
+  mrb_define_method(mrb, s, "read_timeout=", mrb_ssl_set_read_timeout, MRB_ARGS_REQ(1));
 
   ecdsa = mrb_define_class_under(mrb, pkey, "EC", mrb->object_class);
   MRB_SET_INSTANCE_TT(ecdsa, MRB_TT_DATA);

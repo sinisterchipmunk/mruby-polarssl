@@ -186,7 +186,9 @@ assert('PolarSSL::SSL#read') do
   while chunk = ssl.read(1024)
     response << chunk
   end
-  response.size > 0
+  assert_true response.size > 0
+  assert_true ssl.eof?
+  assert_raise(EOFError) { ssl.read(1) }
   #debug
   #p "https response size: #{response.size}"
 end

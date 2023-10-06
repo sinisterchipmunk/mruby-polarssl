@@ -25,6 +25,7 @@ if Object.const_defined? :PolarSSL
       class Error < StandardError; end
       class ReadTimeoutError < StandardError; end
       attr_reader :socket
+      def eof?; @eof; end
     end
   end
 end
