@@ -484,7 +484,7 @@ static mrb_value mrb_ssl_write(mrb_state *mrb, mrb_value self) {
 static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
   mrb_ssl_t *ssl;
   mrb_int maxlen = 0;
-  mrb_value value;
+  mrb_value value = mrb_nil_value();
   char *buf;
   int ret;
 
@@ -504,10 +504,10 @@ static mrb_value mrb_ssl_read(mrb_state *mrb, mrb_value self) {
     mrb_iv_set(mrb, self, mrb_intern_lit(mrb, "@eof"), mrb_true_value());
     value = mrb_nil_value();
   } else if (ret == MBEDTLS_ERR_SSL_TIMEOUT) {
-    free(buf);
+    mrb_free(mrb, buf);
     mrb_raise(mrb, E_SSL_READ_TIMEOUT, "ssl_read() returned E_SSL_READ_TIMEOUT");
   } else if (ret < 0) {
-    free(buf);
+    mrb_free(mrb, buf);
     if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
       mrb_raise(mrb, E_NETWANTREAD, "ssl_read() returned MBEDTLS_ERR_SSL_WANT_READ");
     } else if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
@@ -586,7 +586,7 @@ static mrb_value mrb_ssl_set_read_timeout(mrb_state *mrb, mrb_value self) {
   mrb_int timeout_ms;
   mrb_get_args(mrb, "i", &timeout_ms);
   mbedtls_ssl_conf_read_timeout(&mrbssl->conf, timeout_ms);
-  return mrb_int_value(mrb, timeout_ms);
+  return mrb_fixnum_value(timeout_ms);
 }
 
 static mrb_value mrb_ssl_fileno(mrb_state *mrb, mrb_value self) {
