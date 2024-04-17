@@ -409,12 +409,11 @@ static mrb_value mrb_ssl_set_socket(mrb_state *mrb, mrb_value self) {
 
 static mrb_value mrb_ssl_set_hostname(mrb_state *mrb, mrb_value self) {
   mrb_ssl_t *ssl;
-  mrb_value hostname;
+  const char *hostname = NULL;
 
-  mrb_get_args(mrb, "S", &hostname);
-
+  mrb_get_args(mrb, "z", &hostname);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
-  mbedtls_ssl_set_hostname(&ssl->ssl, RSTRING_PTR(hostname));
+  mbedtls_ssl_set_hostname(&ssl->ssl, hostname);
 
   return mrb_true_value();
 }
