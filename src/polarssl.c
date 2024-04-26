@@ -437,12 +437,15 @@ static void mrb_raise_ssl_error(mrb_state *mrb, const char *funcname, int rc) {
 static mrb_value mrb_ssl_handshake(mrb_state *mrb, mrb_value self) {
   mrb_ssl_t *ssl;
   int ret;
-
+  mrb_value block = mrb_nil_value();
+  mrb_get_args(mrb, "&", &block);
   ssl = DATA_CHECK_GET_PTR(mrb, self, &mrb_ssl_type, mrb_ssl_t);
 
   while( ( ret = mbedtls_ssl_handshake( &ssl->ssl ) ) != 0 ) {
     if( ! mbedtls_status_is_ssl_in_progress( ret ) )
       break;
+    if (!mrb_nil_p(block))
+      mrb_yield(mrb, block, self);
   }
 
   if (ret < 0) {

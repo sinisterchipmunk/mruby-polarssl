@@ -143,6 +143,39 @@ assert('PolarSSL::SSL#handshake') do
   ssl.handshake
 end
 
+assert('PolarSSL::SSL#handshake yields during blocking on a non-blocking socket') do
+  # we connect to a server that will never complete the handshake. It must
+  # time out, therefore we expect our block to be called while we wait.
+  # Raising within that block aborts the whole handshake, so we don't actually
+  # wait for a timeout.
+  begin
+    server_pid = fork do
+      begin
+        server = TCPServer.new('127.0.0.1', 14443)
+        sock = server.accept
+        sock.read
+        exit 0
+      rescue Exception => e
+        puts e.class, e.to_s, *e.backtrace
+      end
+    end
+    sleep 0.25 # allow enough time for server to bind
+    socket = TCPSocket.new('127.0.0.1', 14443)
+    entropy = PolarSSL::Entropy.new
+    ctr_drbg = PolarSSL::CtrDrbg.new(entropy)
+    ssl = PolarSSL::SSL.new
+    ssl.set_endpoint(PolarSSL::SSL::SSL_IS_CLIENT)
+    ssl.set_authmode(PolarSSL::SSL::SSL_VERIFY_NONE)
+    ssl.set_rng(ctr_drbg)
+    ssl.set_socket(socket)
+    ssl.blocking = false
+    class BlockCalled < RuntimeError; end
+    assert_raise(BlockCalled) { ssl.handshake { raise BlockCalled } }
+  ensure
+    Process.kill :SIGTERM, server_pid
+  end
+end
+
 assert('PolarSSL::SSL#handshake err') do
   socket = TCPSocket.new('tls.mbed.org', 80)
   entropy = PolarSSL::Entropy.new
